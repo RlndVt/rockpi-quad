@@ -9,6 +9,7 @@ import gpiod
 import misc
 
 pin = None
+GPIOD_V2 = hasattr(gpiod, 'LineSettings')
 
 
 class Pwm:
@@ -54,18 +55,36 @@ class Gpio:
 
     def tr(self):
         while True:
-            self.line.set_value(1)
+            self.set_value(1)
             time.sleep(self.value[0])
-            self.line.set_value(0)
+            self.set_value(0)
             time.sleep(self.value[1])
 
     def __init__(self, period_s):
-        self.line = gpiod.Chip(os.environ['FAN_CHIP']).get_line(int(os.environ['FAN_LINE']))
-        self.line.request(consumer='fan', type=gpiod.LINE_REQ_DIR_OUT)
+        self.line_offset = int(os.environ['FAN_LINE'])
+        if GPIOD_V2:
+            self.chip = gpiod.Chip(misc.gpiochip_path(os.environ['FAN_CHIP']))
+            settings = gpiod.LineSettings(direction=gpiod.line.Direction.OUTPUT)
+            self.request = self.chip.request_lines(
+                config={self.line_offset: settings},
+                consumer='fan',
+                output_values={self.line_offset: gpiod.line.Value.INACTIVE},
+            )
+        else:
+            self.chip = gpiod.Chip(os.environ['FAN_CHIP'])
+            self.line = self.chip.get_line(self.line_offset)
+            self.line.request(consumer='fan', type=gpiod.LINE_REQ_DIR_OUT)
         self.value = [period_s / 2, period_s / 2]
         self.period_s = period_s
         self.thread = threading.Thread(target=self.tr, daemon=True)
         self.thread.start()
+
+    def set_value(self, value):
+        if GPIOD_V2:
+            active = gpiod.line.Value.ACTIVE if value else gpiod.line.Value.INACTIVE
+            self.request.set_value(self.line_offset, active)
+        else:
+            self.line.set_value(value)
 
     def write(self, duty):
         self.value[1] = duty * self.period_s

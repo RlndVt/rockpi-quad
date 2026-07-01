@@ -22,6 +22,58 @@ cmds = {
 
 lv2dc = OrderedDict({'lv3': 0, 'lv2': 0.25, 'lv1': 0.5, 'lv0': 0.75})
 sata_lines = []
+GPIOD_V2 = hasattr(gpiod, 'LineSettings')
+
+
+def gpiochip_path(chip):
+    chip = str(chip)
+    if chip.startswith('/dev/'):
+        return chip
+    if chip.startswith('gpiochip'):
+        return f'/dev/{chip}'
+    return f'/dev/gpiochip{chip}'
+
+
+def request_input_line(chip_name, line_number, consumer, pull_up=False):
+    line_number = int(line_number)
+    if GPIOD_V2:
+        settings = {
+            'direction': gpiod.line.Direction.INPUT,
+        }
+        if pull_up:
+            settings['bias'] = gpiod.line.Bias.PULL_UP
+        chip = gpiod.Chip(gpiochip_path(chip_name))
+        request = chip.request_lines(
+            config={line_number: gpiod.LineSettings(**settings)},
+            consumer=consumer,
+        )
+        return chip, request
+
+    chip = gpiod.Chip(str(chip_name))
+    line = chip.get_line(line_number)
+    request = {
+        'consumer': consumer,
+        'type': gpiod.LINE_REQ_DIR_IN,
+    }
+    if pull_up and hasattr(gpiod, 'LINE_REQ_FLAG_BIAS_PULL_UP'):
+        request['flags'] = gpiod.LINE_REQ_FLAG_BIAS_PULL_UP
+    line.request(**request)
+    return chip, line
+
+
+def read_line(handle, line_number):
+    line_number = int(line_number)
+    if GPIOD_V2:
+        return int(handle.get_value(line_number) == gpiod.line.Value.ACTIVE)
+    return handle.get_value()
+
+
+def release_line(chip, handle):
+    try:
+        handle.release()
+    finally:
+        if hasattr(chip, 'close'):
+            chip.close()
 
 
 def check_output(cmd):
@@ -97,23 +149,20 @@ def read_conf():
 
 def read_key(pattern, size):
     CHIP_NAME = os.environ['BUTTON_CHIP']
-    LINE_NUMBER = os.environ['BUTTON_LINE']
+    LINE_NUMBER = int(os.environ['BUTTON_LINE'])
 
     s = ''
-    chip = gpiod.Chip(str(CHIP_NAME))
-    line = chip.get_line(int(LINE_NUMBER))
-    line.request(
-        consumer='hat_button',
-        type=gpiod.LINE_REQ_DIR_IN,
-        flags=gpiod.LINE_REQ_FLAG_BIAS_PULL_UP,
-    )
+    chip, line = request_input_line(CHIP_NAME, LINE_NUMBER, 'hat_button', pull_up=True)
 
-    while True:
-        s = s[-size:] + str(line.get_value())
-        for t, p in pattern.items():
-            if p.match(s):
-                return t
-        time.sleep(0.1)
+    try:
+        while True:
+            s = s[-size:] + str(read_line(line, LINE_NUMBER))
+            for t, p in pattern.items():
+                if p.match(s):
+                    return t
+            time.sleep(0.1)
+    finally:
+        release_line(chip, line)
 
 
 def watch_key(q=None):
@@ -169,13 +218,32 @@ def get_func(key):
 
 def disk_turn_on():
     global sata_lines
-    line1 = gpiod.Chip(os.environ['SATA_CHIP']).get_line(int(os.environ['SATA_LINE_1']))
+    chip_name = os.environ['SATA_CHIP']
+    line1 = int(os.environ['SATA_LINE_1'])
+    line2 = int(os.environ['SATA_LINE_2'])
+
+    if GPIOD_V2:
+        chip = gpiod.Chip(gpiochip_path(chip_name))
+        settings = gpiod.LineSettings(direction=gpiod.line.Direction.OUTPUT)
+        request = chip.request_lines(
+            config={(line1, line2): settings},
+            consumer='sata_power',
+            output_values={
+                line1: gpiod.line.Value.ACTIVE,
+                line2: gpiod.line.Value.ACTIVE,
+            },
+        )
+        sata_lines = [chip, request]
+        return
+
+    chip = gpiod.Chip(str(chip_name))
+    line1 = chip.get_line(line1)
     line1.request(consumer='SATA_LINE_1', type=gpiod.LINE_REQ_DIR_OUT)
     line1.set_value(1)
-    line2 = gpiod.Chip(os.environ['SATA_CHIP']).get_line(int(os.environ['SATA_LINE_2']))
+    line2 = chip.get_line(line2)
     line2.request(consumer='SATA_LINE_2', type=gpiod.LINE_REQ_DIR_OUT)
     line2.set_value(1)
-    sata_lines = [line1, line2]
+    sata_lines = [chip, line1, line2]
 
 
 conf = {'disk': [], 'idx': mp.Value('d', -1), 'run': mp.Value('d', 1)}
