@@ -49,7 +49,7 @@ case "$model" in
   if ! grep -q "dtoverlay=pwm,pin=13,func=4" /boot/firmware/config.txt; then
     echo "dtoverlay=pwm,pin=13,func=4" >> /boot/firmware/config.txt
   fi
-  mv /usr/bin/rockpi-quad/env/rpi4.env /etc/rockpi-quad.env
+  cp /usr/bin/rockpi-quad/env/rpi4.env /etc/rockpi-quad.env
   checkReboot
   ;;
 *"Radxa ROCK 4C+"*)
