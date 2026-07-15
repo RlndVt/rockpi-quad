@@ -8,7 +8,6 @@ import gpiod
 
 import misc
 
-pin = None
 GPIOD_V2 = hasattr(gpiod, 'LineSettings')
 
 
@@ -25,7 +24,7 @@ class Pwm:
             with open(f"/sys/class/pwm/{chip}/export", 'w') as f:
                 f.write(fun)
         except OSError:
-            print("Waring: init pwm error")
+            print("Warning: init pwm error")
             traceback.print_exc()
 
     def period(self, ns: int):
